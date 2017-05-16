@@ -4,6 +4,8 @@ from tensorflow.contrib import legacy_seq2seq
 
 import numpy as np
 
+from MultiplicativeLSTMCell import MultiplicativeLSTMCell
+
 
 class Model():
     def __init__(self, args, training=True):
@@ -18,6 +20,8 @@ class Model():
             cell_fn = rnn.GRUCell
         elif args.model == 'lstm':
             cell_fn = rnn.BasicLSTMCell
+        elif args.model == 'mlstm':
+            cell_fn = MultiplicativeLSTMCell
         elif args.model == 'nas':
             cell_fn = rnn.NASCell
         else:
