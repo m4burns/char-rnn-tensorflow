@@ -207,13 +207,16 @@ def _linear(args, output_size, bias, bias_start=0.0, scope=None):
 
     # Now the computation.
     with tf.variable_scope(scope or "Linear"):
-        matrix = tf.get_variable("Matrix", [total_arg_size, output_size])
+        matrix = tf.get_variable("NormalColMatrix", [total_arg_size, output_size])
+        scalars = tf.get_variable("Scalars", [output_size], initializer=tf.constant_initializer(1.0))
+        inv_norms = 1.0 / tf.norm(matrix, axis=0)
+        scaled_norms = scalars * inv_norms
+        scaled_matrix = tf.multiply(matrix, scaled_norms)
+
         if len(args) == 1:
-            res = tf.matmul(args[0], matrix)
+            res = tf.matmul(args[0], scaled_matrix)
         else:
-            print('>> args: {}'.format(args))
-            print('>> matrix: {}'.format(matrix))
-            res = tf.matmul(tf.concat(args, 1), matrix)
+            res = tf.matmul(tf.concat(args, 1), scaled_matrix)
         if not bias:
             return res
         bias_term = tf.get_variable(

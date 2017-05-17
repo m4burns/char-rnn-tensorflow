@@ -3,7 +3,7 @@ import tensorflow as tf
 
 import argparse
 import time
-import os
+import os, re
 from six.moves import cPickle
 
 from utils import TextLoader
@@ -37,8 +37,6 @@ def main():
                         help='clip gradients at this value')
     parser.add_argument('--learning_rate', type=float, default=0.002,
                         help='learning rate')
-    parser.add_argument('--decay_rate', type=float, default=0.97,
-                        help='decay rate for rmsprop')
     parser.add_argument('--output_keep_prob', type=float, default=1.0,
                         help='probability of keeping weights in the hidden layer')
     parser.add_argument('--input_keep_prob', type=float, default=1.0,
@@ -91,25 +89,47 @@ def train(args):
 
     model = Model(args)
 
-    with tf.Session() as sess:
+    config = tf.ConfigProto()
+    config.graph_options.optimizer_options.global_jit_level = tf.OptimizerOptions.ON_1
+
+    with tf.Session(config=config) as sess:
         # instrument for tensorboard
-        summaries = tf.summary.merge_all()
-        writer = tf.summary.FileWriter(
-                os.path.join(args.log_dir, time.strftime("%Y-%m-%d-%H-%M-%S")))
-        writer.add_graph(sess.graph)
+        # summaries = tf.summary.merge_all()
+        # writer = tf.summary.FileWriter(
+        #         os.path.join(args.log_dir, time.strftime("%Y-%m-%d-%H-%M-%S")))
+        # writer.add_graph(sess.graph)
 
         sess.run(tf.global_variables_initializer())
         saver = tf.train.Saver(tf.global_variables())
         # restore model
         if args.init_from is not None:
             saver.restore(sess, ckpt.model_checkpoint_path)
+        lr_initial = args.learning_rate
+        lr_final = 0
+        total_batches = args.num_epochs * data_loader.num_batches
+
+        normalize_my_cols = [ v for v in tf.global_variables() if re.match('.*NormalColMatrix:0$', v.name) ]
+
+        normalize_ops = [ tf.assign(v, tf.multiply(v, 1.0 / tf.maximum(1e-7, tf.norm(v, axis=0)))) for v in normalize_my_cols ]
+
         for e in range(args.num_epochs):
-            sess.run(tf.assign(model.lr,
-                               args.learning_rate * (args.decay_rate ** e)))
             data_loader.reset_batch_pointer()
             state = sess.run(model.initial_state)
+
+            print('Normalize weight vectors...')
+            for op in normalize_ops:
+                sess.run(op)
+            print('done')
+
             for b in range(data_loader.num_batches):
                 start = time.time()
+
+                batch_number = e * data_loader.num_batches + b
+                progress = batch_number / total_batches
+                lr_target = lr_initial * (1.0 - progress) + lr_final * progress
+
+                sess.run(tf.assign(model.lr, lr_target))
+
                 x, y = data_loader.next_batch()
                 feed = {model.input_data: x, model.targets: y}
                 for i, (c, h) in enumerate(model.initial_state):
@@ -118,14 +138,16 @@ def train(args):
                 train_loss, state, _ = sess.run([model.cost, model.final_state, model.train_op], feed)
 
                 # instrument for tensorboard
-                summ, train_loss, state, _ = sess.run([summaries, model.cost, model.final_state, model.train_op], feed)
-                writer.add_summary(summ, e * data_loader.num_batches + b)
+                # summ, train_loss, state, _ = sess.run([summaries, model.cost, model.final_state, model.train_op], feed)
+                # writer.add_summary(summ, e * data_loader.num_batches + b)
 
                 end = time.time()
+
                 print("{}/{} (epoch {}), train_loss = {:.3f}, time/batch = {:.3f}"
                       .format(e * data_loader.num_batches + b,
                               args.num_epochs * data_loader.num_batches,
                               e, train_loss, end - start))
+
                 if (e * data_loader.num_batches + b) % args.save_every == 0\
                         or (e == args.num_epochs-1 and
                             b == data_loader.num_batches-1):
